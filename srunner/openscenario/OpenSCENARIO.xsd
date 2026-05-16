@@ -1229,10 +1229,41 @@ See www.asam.net/license.html for further details.
 	</xsd:complexType>
 	<xsd:complexType name="SpeedActionTarget">
 		<xsd:choice>
-			<xsd:element name="RelativeTargetSpeed" type="RelativeTargetSpeed" minOccurs="0"/>
-			<xsd:element name="AbsoluteTargetSpeed" type="AbsoluteTargetSpeed" minOccurs="0"/>
+			<xsd:element name="RelativeTargetSpeed"   type="RelativeTargetSpeed"   minOccurs="0"/>
+			<xsd:element name="AbsoluteTargetSpeed"   type="AbsoluteTargetSpeed"   minOccurs="0"/>
+			<xsd:element name="StochasticTargetSpeed" type="StochasticTargetSpeed" minOccurs="0"/>
 		</xsd:choice>
 	</xsd:complexType>
+	<!-- StochasticTargetSpeed: intra-run dynamic speed resampling (1.0 extension) -->
+	<xsd:complexType name="StochasticTargetSpeed">
+		<xsd:sequence>
+			<xsd:element name="Distribution"    type="SpeedDistribution"/>
+			<xsd:element name="ResampleTrigger" type="ResampleTrigger"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="SpeedDistribution">
+		<xsd:attribute name="type"     type="DistributionType" use="required"/>
+		<xsd:attribute name="base"     type="Double"           use="required"/>
+		<xsd:attribute name="noise"    type="Double"           use="required"/>
+		<xsd:attribute name="minSpeed" type="Double"           use="optional"/>
+		<xsd:attribute name="maxSpeed" type="Double"           use="optional"/>
+	</xsd:complexType>
+	<xsd:simpleType name="DistributionType">
+		<xsd:restriction base="xsd:string">
+			<xsd:enumeration value="uniform"/>
+			<xsd:enumeration value="gaussian"/>
+		</xsd:restriction>
+	</xsd:simpleType>
+	<xsd:complexType name="ResampleTrigger">
+		<xsd:attribute name="type"  type="ResampleTriggerType" use="required"/>
+		<xsd:attribute name="value" type="Double"              use="required"/>
+	</xsd:complexType>
+	<xsd:simpleType name="ResampleTriggerType">
+		<xsd:restriction base="xsd:string">
+			<xsd:enumeration value="time"/>
+			<xsd:enumeration value="distance"/>
+		</xsd:restriction>
+	</xsd:simpleType>
 	<xsd:complexType name="SpeedCondition">
 		<xsd:attribute name="rule" type="Rule" use="required"/>
 		<xsd:attribute name="value" type="Double" use="required"/>

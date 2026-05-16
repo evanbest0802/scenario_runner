@@ -1,0 +1,170 @@
+<?xml version="1.0"?>
+<!--
+  Pedestrian walking at 10 km/h ± 1 km/h (uniform), speed resampled every 1.5 seconds.
+  Map: Town01  —  ego vehicle is static; scenario ends after 60 simulation seconds.
+
+  Speed values are in m/s:
+    base  = 10 km/h = 2.778 m/s
+    noise =  1 km/h = 0.278 m/s
+-->
+<OpenSCENARIO>
+  <FileHeader revMajor="1" revMinor="0"
+              date="2026-05-10T00:00:00"
+              description="Pedestrian with stochastic speed (10±1 km/h, uniform, time-resampled)"
+              author="Evan"/>
+
+  <ParameterDeclarations/>
+  <CatalogLocations/>
+
+  <RoadNetwork>
+    <LogicFile filepath="Town01"/>
+    <SceneGraphFile filepath=""/>
+  </RoadNetwork>
+
+  <Entities>
+    <!-- Static ego vehicle (parked at the side of the road) -->
+    <ScenarioObject name="hero">
+      <Vehicle name="vehicle.volkswagen.t2" vehicleCategory="car">
+        <ParameterDeclarations/>
+        <Performance maxSpeed="69.444" maxAcceleration="200" maxDeceleration="10.0"/>
+        <BoundingBox>
+          <Center x="1.5" y="0.0" z="0.9"/>
+          <Dimensions width="2.1" length="4.5" height="1.8"/>
+        </BoundingBox>
+        <Axles>
+          <FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3"/>
+          <RearAxle  maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3"/>
+        </Axles>
+        <Properties>
+          <Property name="type" value="ego_vehicle"/>
+        </Properties>
+      </Vehicle>
+    </ScenarioObject>
+
+    <!-- Pedestrian that will walk with stochastic speed -->
+    <ScenarioObject name="Pedestrian_01">
+      <Pedestrian model="walker.pedestrian.0001"
+                  mass="80.0"
+                  name="walker.pedestrian.0001"
+                  pedestrianCategory="pedestrian">
+        <ParameterDeclarations/>
+        <BoundingBox>
+          <Center x="0.0" y="0.0" z="0.9"/>
+          <Dimensions width="0.5" length="0.5" height="1.8"/>
+        </BoundingBox>
+        <Properties>
+          <Property name="type" value="simulation"/>
+        </Properties>
+      </Pedestrian>
+    </ScenarioObject>
+  </Entities>
+
+  <Storyboard>
+    <Init>
+      <Actions>
+        <!-- Place ego vehicle (static / parked) -->
+        <Private entityRef="hero">
+          <PrivateAction>
+            <TeleportAction>
+              <Position>
+                <WorldPosition x="120" y="-200" z="0.3" h="0"/>
+              </Position>
+            </TeleportAction>
+          </PrivateAction>
+        </Private>
+
+        <!-- Place pedestrian on the footpath -->
+        <Private entityRef="Pedestrian_01">
+          <PrivateAction>
+            <TeleportAction>
+              <Position>
+                <WorldPosition x="135" y="-200" z="0.3" h="1.57079632679"/>
+              </Position>
+            </TeleportAction>
+          </PrivateAction>
+        </Private>
+      </Actions>
+    </Init>
+
+    <Story name="StochasticWalkStory">
+      <Act name="WalkAct">
+        <ManeuverGroup maximumExecutionCount="1" name="WalkGroup">
+          <Actors selectTriggeringEntities="false">
+            <EntityRef entityRef="Pedestrian_01"/>
+          </Actors>
+
+          <Maneuver name="StochasticWalkManeuver">
+            <Event name="PedestrianStartsWalking" priority="overwrite">
+              <Action name="ApplyStochasticSpeed">
+                <PrivateAction>
+                  <LongitudinalAction>
+                    <SpeedAction>
+                      <!-- step dynamics: speed is applied instantaneously each resample tick -->
+                      <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="rate"/>
+                      <SpeedActionTarget>
+                        <StochasticTargetSpeed>
+                          <!-- 10 km/h ± 1 km/h, clamped to [2.0, 3.5] m/s -->
+                          <Distribution type="uniform"
+                                        base="2.778"
+                                        noise="0.278"
+                                        minSpeed="2.0"
+                                        maxSpeed="3.5"/>
+                          <!-- resample every 1.5 seconds -->
+                          <ResampleTrigger type="time" value="1.5"/>
+                        </StochasticTargetSpeed>
+                      </SpeedActionTarget>
+                    </SpeedAction>
+                  </LongitudinalAction>
+                </PrivateAction>
+              </Action>
+
+              <!-- Start immediately when simulation begins -->
+              <StartTrigger>
+                <ConditionGroup>
+                  <Condition name="ImmediateStart" delay="0" conditionEdge="rising">
+                    <ByValueCondition>
+                      <SimulationTimeCondition value="20" rule="greaterThan"/>
+                    </ByValueCondition>
+                  </Condition>
+                </ConditionGroup>
+              </StartTrigger>
+            </Event>
+          </Maneuver>
+        </ManeuverGroup>
+
+        <!-- Act starts at simulation time 0 -->
+        <StartTrigger>
+          <ConditionGroup>
+            <Condition name="ActStart" delay="0" conditionEdge="rising">
+              <ByValueCondition>
+                <SimulationTimeCondition value="0" rule="greaterThan"/>
+              </ByValueCondition>
+            </Condition>
+          </ConditionGroup>
+        </StartTrigger>
+
+        <!-- Act ends after 60 seconds -->
+        <StopTrigger>
+          <ConditionGroup>
+            <Condition name="ActEnd" delay="0" conditionEdge="rising">
+              <ByValueCondition>
+                <SimulationTimeCondition value="60" rule="greaterThan"/>
+              </ByValueCondition>
+            </Condition>
+          </ConditionGroup>
+        </StopTrigger>
+      </Act>
+    </Story>
+
+    <!-- Global stop: simulation ends after 60 seconds -->
+    <StopTrigger>
+      <ConditionGroup>
+        <Condition name="GlobalEnd" delay="0" conditionEdge="rising">
+          <ByValueCondition>
+            <SimulationTimeCondition value="60" rule="greaterThan"/>
+          </ByValueCondition>
+        </Condition>
+      </ConditionGroup>
+    </StopTrigger>
+  </Storyboard>
+</OpenSCENARIO>

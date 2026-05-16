@@ -30,6 +30,7 @@ from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (TrafficLig
                                                                       ChangeAutoPilot,
                                                                       ChangeRoadFriction,
                                                                       ChangeActorTargetSpeed,
+                                                                      StochasticActorSpeed,
                                                                       ChangeActorControl,
                                                                       ChangeActorWaypoints,
                                                                       ChangeActorLateralMotion,
@@ -1348,6 +1349,22 @@ class OpenScenarioParser(object):
                                                         distance=distance,
                                                         duration=duration,
                                                         name=maneuver_name)
+
+                    # stochastic speed resampling (OpenSCENARIO 1.0 extension)
+                    if long_maneuver.find("SpeedActionTarget").find("StochasticTargetSpeed") is not None:
+                        stoch = long_maneuver.find("SpeedActionTarget").find("StochasticTargetSpeed")
+                        dist_el = stoch.find("Distribution")
+                        trig_el = stoch.find("ResampleTrigger")
+                        atomic = StochasticActorSpeed(
+                            actor,
+                            distribution_type=dist_el.attrib.get('type', 'uniform'),
+                            base=float(dist_el.attrib.get('base', 0)),
+                            noise=float(dist_el.attrib.get('noise', 0)),
+                            min_speed=float(dist_el.attrib.get('minSpeed', 0)),
+                            max_speed=float(dist_el.attrib.get('maxSpeed', float('inf'))),
+                            resample_type=trig_el.attrib.get('type', 'time'),
+                            resample_value=float(trig_el.attrib.get('value', float('inf'))),
+                            name=maneuver_name)
 
                 elif private_action.find('LongitudinalDistanceAction') is not None:
                     long_dist_action = private_action.find("LongitudinalDistanceAction")

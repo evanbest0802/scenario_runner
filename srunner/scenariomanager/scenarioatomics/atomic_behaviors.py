@@ -4932,6 +4932,105 @@ class ScenarioTimeout(AtomicBehavior):
         super().terminate(new_status)
 
 
+class StochasticActorSpeed(AtomicBehavior):
+
+    """
+    Continuously vary a pedestrian's speed by resampling from a probability distribution.
+
+    Every ``resample_value`` seconds (time) or metres (distance) a new speed is drawn
+    and pushed to the actor's controller via the ActorsWithController blackboard — the
+    same mechanism used by ChangeActorTargetSpeed.  The behavior stays RUNNING until
+    the enclosing Event ends or another longitudinal command supersedes it.
+
+    Args:
+        actor (carla.Actor): Walker to control.
+        distribution_type (str): "uniform" or "gaussian".
+        base (float): Center speed [m/s].
+        noise (float): Half-range (uniform) or stddev (gaussian) [m/s].
+        min_speed (float): Hard lower clamp [m/s]. Defaults to 0.
+        max_speed (float): Hard upper clamp [m/s]. Defaults to inf.
+        resample_type (str): "time" or "distance".
+        resample_value (float): Seconds or metres between resamples.
+        name (str): Behavior name.
+    """
+
+    def __init__(self, actor, distribution_type, base, noise,
+                 min_speed=0.0, max_speed=float('inf'),
+                 resample_type="time", resample_value=float('inf'),
+                 name="StochasticActorSpeed"):
+        super().__init__(name, actor)
+        self._distribution_type = distribution_type
+        self._base = base
+        self._noise = noise
+        self._min_speed = min_speed
+        self._max_speed = max_speed
+        self._resample_type = resample_type
+        self._resample_value = resample_value
+
+        self._start_time = None
+        self._last_time = None
+        self._last_location = None
+        self._acc = 0.0
+
+    def initialise(self):
+        actor_dict = {}
+        try:
+            check_actors = operator.attrgetter("ActorsWithController")
+            actor_dict = check_actors(py_trees.blackboard.Blackboard())
+        except AttributeError:
+            pass
+
+        if not actor_dict or self._actor.id not in actor_dict:
+            raise RuntimeError("StochasticActorSpeed: actor not found in ActorsWithController")
+
+        self._start_time = GameTime.get_time()
+        self._last_time = self._start_time
+        self._last_location = CarlaDataProvider.get_location(self._actor)
+        self._acc = 0.0
+
+        actor_dict[self._actor.id].update_target_speed(self._sample_speed(), start_time=self._start_time)
+        super().initialise()
+
+    def update(self):
+        actor_dict = {}
+        try:
+            check_actors = operator.attrgetter("ActorsWithController")
+            actor_dict = check_actors(py_trees.blackboard.Blackboard())
+        except AttributeError:
+            pass
+
+        if not actor_dict or self._actor.id not in actor_dict:
+            return py_trees.common.Status.FAILURE
+
+        if actor_dict[self._actor.id].get_last_longitudinal_command() != self._start_time:
+            return py_trees.common.Status.SUCCESS
+
+        now = GameTime.get_time()
+        dt = now - self._last_time
+        self._last_time = now
+
+        if self._resample_type == "time":
+            self._acc += dt
+        else:
+            current_loc = CarlaDataProvider.get_location(self._actor)
+            if current_loc is not None and self._last_location is not None:
+                self._acc += current_loc.distance(self._last_location)
+            self._last_location = current_loc
+
+        if self._acc >= self._resample_value:
+            self._acc = 0.0
+            actor_dict[self._actor.id].update_target_speed(self._sample_speed())
+
+        return py_trees.common.Status.RUNNING
+
+    def _sample_speed(self):
+        if self._distribution_type == "uniform":
+            sample = random.uniform(self._base - self._noise, self._base + self._noise)
+        else:
+            sample = random.normal(self._base, self._noise)
+        return float(np.clip(sample, self._min_speed, self._max_speed))
+
+
 class MovePedestrianWithEgo(AtomicBehavior):
     """This class is an atomic behavior that moves a pedestrian with the ego vehicle."""
 

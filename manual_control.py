@@ -213,12 +213,13 @@ class World(object):
 
 class KeyboardControl(object):
     """Class that handles keyboard input."""
-    def __init__(self, world, start_in_autopilot):
+    def __init__(self, world, start_in_autopilot, tm_port=8000):
         self._autopilot_enabled = start_in_autopilot
+        self._tm_port = tm_port
         self._control = carla.VehicleControl()
         self._lights = carla.VehicleLightState.NONE
         self._steer_cache = 0.0
-        world.player.set_autopilot(self._autopilot_enabled)
+        world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
         world.player.set_light_state(self._lights)
         world.hud.notification("Press 'H' or '?' for help.", seconds=4.0)
 
@@ -254,7 +255,7 @@ class KeyboardControl(object):
                     world.destroy_sensors()
                     # disable autopilot
                     self._autopilot_enabled = False
-                    world.player.set_autopilot(self._autopilot_enabled)
+                    world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
                     world.hud.notification("Replaying file 'manual_recording.rec'")
                     # replayer
                     client.replay_file("manual_recording.rec", world.recording_start, 0, 0)
@@ -284,7 +285,7 @@ class KeyboardControl(object):
                     self._control.gear = self._control.gear + 1
                 elif event.key == K_p and not pygame.key.get_mods() & KMOD_CTRL:
                     self._autopilot_enabled = not self._autopilot_enabled
-                    world.player.set_autopilot(self._autopilot_enabled)
+                    world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
                     world.hud.notification(
                         'Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
                 elif event.key == K_l and pygame.key.get_mods() & KMOD_CTRL:
@@ -902,7 +903,7 @@ def game_loop(args):
 
         hud = HUD(args.width, args.height)
         world = World(client.get_world(), hud, args)
-        controller = KeyboardControl(world, args.autopilot)
+        controller = KeyboardControl(world, args.autopilot, args.trafficManagerPort)
 
         sim_world.wait_for_tick()
 
@@ -968,6 +969,12 @@ def main():
         metavar='WIDTHxHEIGHT',
         default='1280x720',
         help='window resolution (default: 1280x720)')
+    argparser.add_argument(
+        '--trafficManagerPort',
+        metavar='P',
+        default=8000,
+        type=int,
+        help='port of the Traffic Manager (default: 8000)')
     argparser.add_argument(
         '--keep_ego_vehicle',
         action='store_true',
