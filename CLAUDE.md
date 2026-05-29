@@ -1,4 +1,4 @@
-# OpenSCENARIO 1.0 Stochastic Extension — Implementation Spec
+# OpenSCENARIO 1.0 Stochastic Extension — Implementation Notes
 
 ## Background
 
@@ -125,134 +125,123 @@ Extended schema:
 
 ## Semantics / Runtime Behaviour
 
-1. When the `SpeedAction` is triggered (Init or Story), the runtime parses
-   `StochasticTargetSpeed` and enters a continuous resample loop.
+1. When the `SpeedAction` is triggered (Init or Story), the runtime creates a
+   `StochasticActorSpeed` behavior node that runs alongside the scenario tree.
 
 2. **Time-based trigger (`type="time"`)**: every `value` simulation seconds,
-   draw a new speed sample from the distribution and call
-   `walker.apply_control(carla.WalkerControl(speed=sampled_speed, ...))`.
+   draw a new speed sample from the distribution and push it to the actor's
+   controller via `ActorControl.update_target_speed()`.
 
 3. **Distance-based trigger (`type="distance"`)**: accumulate displacement
-   since last resample; when accumulated distance ≥ `value` metres, resample.
+   (diff of `CarlaDataProvider.get_location()` between ticks); when accumulated
+   distance ≥ `value` metres, resample.
 
 4. **Sampling rules**:
    - `uniform`: sample ∈ `[base - noise, base + noise]`, then clip to `[minSpeed, maxSpeed]`.
    - `gaussian`: sample from `Normal(mean=base, stddev=noise)`, then clip to `[minSpeed, maxSpeed]`.
 
-5. The loop runs until the enclosing `Event` ends or the `Act` ends.
+5. The behavior stays `RUNNING` until the enclosing `Event` ends or another
+   longitudinal command supersedes it (supersede detection via `get_last_longitudinal_command()`).
 
 6. `SpeedActionDynamics` is still parsed but for `StochasticTargetSpeed` the
    recommended value is `dynamicsShape="step"` (instantaneous application per
-   resample tick). Other shapes are ignored with a warning.
+   resample tick). Other shapes are ignored.
 
 ---
 
-## Implementation Tasks
+## Implementation — What Was Actually Done
 
-### 1. XSD Schema Extension (`openscenario_stochastic.xsd`)
+The feature is integrated **directly into the existing scenario_runner source files**.
+No separate module or folder is created. Three files were modified, one example added.
 
-- Start from the official OpenSCENARIO 1.0 XSD
-  (`scenario_runner/srunner/openscenario/OpenSCENARIO.xsd` in CARLA's scenario_runner).
-- Add the new types: `StochasticTargetSpeed`, `SpeedDistribution`,
-  `ResampleTrigger`, `DistributionType`, `ResampleTriggerType`.
-- Ensure `SpeedActionTarget` becomes a `xsd:choice` of three elements.
+### 1. XSD Schema Extension
 
-### 2. Parser (`stochastic_parser.py`)
+**File:** `srunner/openscenario/OpenSCENARIO.xsd`
 
-Parse `<StochasticTargetSpeed>` from an `.xosc` file using Python's `xml.etree.ElementTree`.
+`SpeedActionTarget` was changed from a two-way choice to a three-way choice, and
+five new type definitions were appended after the existing `SpeedActionTarget` block:
+- `StochasticTargetSpeed` (sequence of `Distribution` + `ResampleTrigger`)
+- `SpeedDistribution` (attributes: `type`, `base`, `noise`, `minSpeed`, `maxSpeed`)
+- `DistributionType` (enumeration: `"uniform"` | `"gaussian"`)
+- `ResampleTrigger` (attributes: `type`, `value`)
+- `ResampleTriggerType` (enumeration: `"time"` | `"distance"`)
 
-Expected output (Python dataclass or dict):
-```python
-@dataclass
-class StochasticSpeedConfig:
-    distribution_type: str    # "uniform" | "gaussian"
-    base: float               # m/s
-    noise: float              # m/s
-    min_speed: float          # m/s (default: 0.0)
-    max_speed: float          # m/s (default: inf)
-    resample_type: str        # "time" | "distance"
-    resample_value: float     # seconds or metres
-```
+Note: attributes use the existing `Double` type alias already defined in the schema,
+not the raw `xsd:double`.
 
-The parser should fall back gracefully: if the element is `<AbsoluteTargetSpeed>`,
-return a `StochasticSpeedConfig` with `noise=0` and `resample_value=inf` (never resamples),
-so the rest of the runtime code is uniform.
+### 2. Parser
 
-### 3. CARLA Runtime Controller (`stochastic_walker_controller.py`)
+**File:** `srunner/tools/openscenario_parser.py`
 
-```python
-class StochasticWalkerController:
-    """
-    Wraps a CARLA Walker actor and drives it with dynamically resampled speed
-    according to a StochasticSpeedConfig.
-    """
+Two changes:
+1. **Import line (~line 33):** `StochasticActorSpeed` added to the import from
+   `srunner.scenariomanager.scenarioatomics.atomic_behaviors`.
+2. **Parsing branch (~line 1353):** After the `RelativeTargetSpeed` parsing block,
+   a new `if` branch checks for `StochasticTargetSpeed` under `SpeedActionTarget`
+   and constructs a `StochasticActorSpeed` atomic behavior with the parsed parameters.
+   Parser defaults: `minSpeed → 0`, `maxSpeed → inf`, `type → "time"`,
+   `value → inf` (never resamples, stays at initial sample forever).
 
-    def __init__(self, walker: carla.Actor, config: StochasticSpeedConfig):
-        ...
+### 3. Runtime Behavior
 
-    def tick(self, delta_time: float):
-        """
-        Call this every simulation tick.
-        delta_time: seconds elapsed since last tick (from world snapshot).
-        Internally tracks time/distance accumulator and resamples when due.
-        Calls walker.apply_control() with the current sampled speed.
-        """
-        ...
+**File:** `srunner/scenariomanager/scenarioatomics/atomic_behaviors.py`
 
-    def _sample_speed(self) -> float:
-        """Draw a new speed from the configured distribution."""
-        ...
+New class `StochasticActorSpeed(AtomicBehavior)` added at end of file (~line 4935).
 
-    def _get_direction(self) -> carla.Vector3D:
-        """Return normalised forward vector of the walker."""
-        ...
-```
+Architecture mirrors `ChangeActorTargetSpeed` exactly:
+- Uses the **ActorsWithController blackboard** (`py_trees.blackboard.Blackboard().ActorsWithController`)
+  to reach the actor's `ActorControl` instance.
+- **Supersede mechanism**: stores `_start_time = GameTime.get_time()` in `initialise()`,
+  calls `update_target_speed(..., start_time=_start_time)`.  Each `update()` checks
+  `get_last_longitudinal_command() != _start_time` → if true, another speed command
+  took over, returns `SUCCESS` immediately.
+- **Accumulator**: `_acc` tracks elapsed time (time mode) or accumulated distance
+  (distance mode). Resets to 0 after each resample.
+- **Distance mode**: uses `CarlaDataProvider.get_location()` position diff (not
+  velocity × dt) to avoid floating-point drift.
+- **`_sample_speed()`**: calls `numpy.random.uniform` or `numpy.random.normal`,
+  then `numpy.clip` to enforce `[minSpeed, maxSpeed]`. The `random` and `np` names
+  here refer to `numpy.random` and `numpy` respectively (imported at top of file).
 
-Key implementation notes:
-- Use `world.on_tick(callback)` or a synchronous `world.tick()` loop.
-- For distance-based resample: compute displacement using
-  `walker.get_velocity()` integrated over `delta_time`, OR diff of
-  `walker.get_location()` between ticks.
-- Thread safety: CARLA callbacks run in a separate thread; use a lock or
-  move logic into the main loop.
+Key safety property: `minSpeed` defaults to 0 at the parser level, and
+`PedestrianControl.run_step()` raises `NotImplementedError` on negative
+`_target_speed` as a second-layer guard.
 
-### 4. Integration Test (`test_stochastic_walker.py`)
+### 4. Example Scenario
 
-Write a pytest-based test that:
-1. Loads a minimal `.xosc` file containing one `<StochasticTargetSpeed>` element.
-2. Parses it with `stochastic_parser.py`.
-3. Spawns a walker in CARLA (requires a running CARLA server on `localhost:2000`).
-4. Runs the controller for 30 simulation seconds.
-5. Asserts that the observed speeds stay within `[base - noise, base + noise]`
-   (and within `[minSpeed, maxSpeed]`).
-6. Asserts that the speed changes at least `floor(30 / resample_value) - 1` times
-   (allowing for one missed tick at boundaries).
+**File:** `srunner/examples/pedestrian_stochastic.xosc`
 
-### 5. Example Scenario File (`pedestrian_stochastic.xosc`)
-
-A complete runnable `.xosc` file with:
-- One ego vehicle (static or slow-moving).
-- One pedestrian (`Pedestrian_01`) using `<StochasticTargetSpeed>` with
-  `uniform` distribution, `base=2.778`, `noise=0.278`, `resample type="time" value="1.5"`.
-- Trigger: SimulationTime > 0 (starts immediately).
-- End condition: SimulationTime > 60.
+- Map: `Town01`
+- Ego (`hero`): static VW T2 van at `(120, -200, 0.3)`, assigned `external_control`
+  module so keyboard input works from `manual_control.py`.
+- Pedestrian (`Pedestrian_01`): walker at `(135, -200, 0.3)`, heading north (`h=1.5708`).
+- Stochastic speed: `gaussian, base=0.3, noise=0.2, minSpeed=0.1, maxSpeed=0.5`,
+  resampled every `0.5 s`.
+- Pedestrian starts at `SimTime > 10 s`; scenario ends at `SimTime > 60 s`.
 
 ---
 
-## File Structure
+## How to Run
 
+```bash
+# Terminal 1 — launch CARLA
+./CarlaUE4.sh -prefernvidia -quality-level=Low -RenderOffScreen
+
+# Terminal 2 — run the scenario
+python3 scenario_runner.py \
+    --openscenario srunner/examples/pedestrian_stochastic.xosc \
+    --reloadWorld \
+    --trafficManagerPort 8100
+
+# Terminal 3 — keyboard control for ego (optional)
+python3 manual_control.py --trafficManagerPort 8100
 ```
-openscenario_stochastic/
-├── CLAUDE.md                          ← this file
-├── schema/
-│   └── openscenario_stochastic.xsd   ← extended XSD
-├── src/
-│   ├── stochastic_parser.py           ← XML parser
-│   └── stochastic_walker_controller.py← CARLA runtime controller
-├── scenarios/
-│   └── pedestrian_stochastic.xosc    ← example scenario
-└── tests/
-    └── test_stochastic_walker.py      ← integration test
+
+Required environment:
+```bash
+export CARLA_ROOT=/path/to/carla
+export SCENARIO_RUNNER_ROOT=/path/to/scenario_runner
+export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI/carla
 ```
 
 ---
@@ -261,20 +250,21 @@ openscenario_stochastic/
 
 - Python 3.8+
 - `carla` Python package (matching your CARLA server version, e.g. 0.9.15)
-- `pytest` for tests
-- No third-party XML libraries needed; `xml.etree.ElementTree` (stdlib) is sufficient.
-- `numpy` recommended for `gaussian` sampling (`numpy.random.normal`).
+- `numpy` (for gaussian sampling and `np.clip`)
+- No additional third-party libraries needed beyond what scenario_runner already uses.
 
 ---
 
 ## Constraints & Notes
 
-- **Unit**: all speed values in the XML are in **m/s**. The comment in the example
-  shows km/h for human readability only.
-- **Backward compatibility**: a `.xosc` file using only `<AbsoluteTargetSpeed>` or
-  `<RelativeTargetSpeed>` must still parse and run without modification.
-- **No OpenSCENARIO 1.1+ features**: do not use `ParameterValueDistribution`,
-  `Variables`, or expression syntax — stay within 1.0 semantics except for the
+- **Unit**: all speed values in the XML are in **m/s**.
+- **Backward compatibility**: `.xosc` files using only `<AbsoluteTargetSpeed>` or
+  `<RelativeTargetSpeed>` continue to work without modification.
+- **No OpenSCENARIO 1.1+ features**: stays within 1.0 semantics except for the
   new element.
-- **CARLA version**: tested against CARLA 0.9.x. The `WalkerAIController` is NOT
-  used here; we use manual `WalkerControl` for precise speed control.
+- **Pedestrian only (in practice)**: `StochasticActorSpeed` calls
+  `update_target_speed()` which routes through `PedestrianControl` or
+  `NpcVehicleControl` transparently. Vehicles accept the command but their PID
+  controller smooths out speed changes — abrupt resampling is most visible on walkers.
+- **`WalkerAIController` is NOT used**: speed is controlled manually via
+  `WalkerControl.speed`, giving precise per-tick control.

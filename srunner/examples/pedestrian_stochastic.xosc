@@ -62,7 +62,7 @@
   <Storyboard>
     <Init>
       <Actions>
-        <!-- Place ego vehicle (static / parked) -->
+        <!-- Place ego vehicle and assign external (manual) controller -->
         <Private entityRef="hero">
           <PrivateAction>
             <TeleportAction>
@@ -70,6 +70,25 @@
                 <WorldPosition x="120" y="-200" z="0.3" h="0"/>
               </Position>
             </TeleportAction>
+          </PrivateAction>
+          <PrivateAction>
+            <ControllerAction>
+              <AssignControllerAction>
+                <Controller name="HeroAgent">
+                  <Properties>
+                    <Property name="module" value="external_control"/>
+                  </Properties>
+                </Controller>
+              </AssignControllerAction>
+              <OverrideControllerValueAction>
+                <Throttle value="0" active="false"/>
+                <Brake value="0" active="false"/>
+                <Clutch value="0" active="false"/>
+                <ParkingBrake value="0" active="false"/>
+                <SteeringWheel value="0" active="false"/>
+                <Gear number="0" active="false"/>
+              </OverrideControllerValueAction>
+            </ControllerAction>
           </PrivateAction>
         </Private>
 
@@ -105,12 +124,12 @@
                         <StochasticTargetSpeed>
                           <!-- 10 km/h ± 1 km/h, clamped to [2.0, 3.5] m/s -->
                           <Distribution type="uniform"
-                                        base="2.778"
-                                        noise="0.278"
-                                        minSpeed="2.0"
-                                        maxSpeed="3.5"/>
+                                        base="0.3"
+                                        noise="0.2"
+                                        minSpeed="0.1"
+                                        maxSpeed="0.5"/>
                           <!-- resample every 1.5 seconds -->
-                          <ResampleTrigger type="time" value="1.5"/>
+                          <ResampleTrigger type="time" value="0.5"/>
                         </StochasticTargetSpeed>
                       </SpeedActionTarget>
                     </SpeedAction>
@@ -123,7 +142,7 @@
                 <ConditionGroup>
                   <Condition name="ImmediateStart" delay="0" conditionEdge="rising">
                     <ByValueCondition>
-                      <SimulationTimeCondition value="20" rule="greaterThan"/>
+                      <SimulationTimeCondition value="10" rule="greaterThan"/>
                     </ByValueCondition>
                   </Condition>
                 </ConditionGroup>
